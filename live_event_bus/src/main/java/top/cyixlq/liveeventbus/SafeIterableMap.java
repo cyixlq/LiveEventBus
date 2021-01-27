@@ -15,14 +15,15 @@ import java.util.WeakHashMap;
  */
 public class SafeIterableMap<K, V> implements Iterable<Map.Entry<K, V>> {
 
-    @SuppressWarnings("WeakerAccess") /* synthetic access */
-            Entry<K, V> mStart;
+    @SuppressWarnings("WeakerAccess")
+    private Entry<K, V> mStart;
     private Entry<K, V> mEnd;
     // using WeakHashMap over List<WeakReference>, so we don't have to manually remove
     // WeakReferences that have null in them.
-    private WeakHashMap<SupportRemove<K, V>, Boolean> mIterators = new WeakHashMap<>();
+    private final WeakHashMap<SupportRemove<K, V>, Boolean> mIterators = new WeakHashMap<>();
     private int mSize = 0;
 
+    @Nullable
     protected Entry<K, V> get(K k) {
         Entry<K, V> currentNode = mStart;
         while (currentNode != null) {

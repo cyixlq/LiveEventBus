@@ -7,24 +7,22 @@ import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleEventObserver;
 import androidx.lifecycle.LifecycleOwner;
 import androidx.lifecycle.Observer;
+
 import org.jetbrains.annotations.NotNull;
+
 import java.util.Iterator;
-import java.util.LinkedList;
 import java.util.Map;
+
 import static androidx.lifecycle.Lifecycle.State.CREATED;
 import static androidx.lifecycle.Lifecycle.State.DESTROYED;
 
 public class LiveEvent<T> {
-    static final int START_VERSION = -1;
-    static final Object NOT_SET = new Object();
+    private static final Object NOT_SET = new Object();
     private final SafeIterableMap<Observer<? super T>, ObserverWrapper> mObservers = new SafeIterableMap<>();
-
     private volatile Object mData = NOT_SET;
-    private int mVersion = START_VERSION;
     private boolean mDispatchingValue;
     @SuppressWarnings("FieldCanBeLocal")
     private boolean mDispatchInvalidated;
-    private final LinkedList<Object> mStickyValue = new LinkedList<>();
 
     private void considerNotify(ObserverWrapper observer) {
         if (!observer.mActive) {
@@ -34,24 +32,16 @@ public class LiveEvent<T> {
             observer.activeStateChanged(false);
             return;
         }
-        if (observer.mLastVersion >= mVersion) {
+        if (mData == NOT_SET) {
+            // 从没发送过事件直接忽视分发事件
             return;
         }
-        observer.mLastVersion = mVersion;
-        if (observer.isStickyMode) {
-            for (Object value : mStickyValue) {
-                //noinspection unchecked
-                observer.mObserver.onChanged((T) value);
-            }
-            observer.isStickyMode = false;
-        } else {
-            //noinspection unchecked
-            observer.mObserver.onChanged((T) mData);
-        }
+        //noinspection unchecked
+        observer.mObserver.onChanged((T) mData);
     }
 
     @SuppressWarnings("WeakerAccess")
-    void dispatchingValue(@Nullable ObserverWrapper initiator) {
+    private void dispatchingValue(@Nullable ObserverWrapper initiator) {
         if (mDispatchingValue) {
             mDispatchInvalidated = true;
             return;
@@ -121,7 +111,7 @@ public class LiveEvent<T> {
     private void realObserveForever(@NonNull Observer<? super T> observer, boolean isStickyMode) {
         AlwaysActiveObserver wrapper = new AlwaysActiveObserver(observer, isStickyMode);
         ObserverWrapper existing = mObservers.putIfAbsent(observer, wrapper);
-        if (existing != null && existing instanceof LiveEvent.LifecycleBoundObserver) {
+        if (existing != null && (existing instanceof LiveEvent.LifecycleBoundObserver)) {
             throw new IllegalArgumentException("Cannot add the same observer"
                     + " with different lifecycles");
         }
@@ -163,9 +153,7 @@ public class LiveEvent<T> {
     @MainThread
     private void setValue(T value) {
         assertMainThread("setValue");
-        mVersion++;
         mData = value;
-        mStickyValue.add(value);
         dispatchingValue(null);
     }
 
@@ -207,8 +195,7 @@ public class LiveEvent<T> {
     private abstract class ObserverWrapper {
         final Observer<? super T> mObserver;
         boolean mActive;
-        int mLastVersion = START_VERSION;
-        boolean isStickyMode;
+        final boolean isStickyMode;
 
         ObserverWrapper(Observer<? super T> observer, final boolean isStickyMode) {
             mObserver = observer;
