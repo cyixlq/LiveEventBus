@@ -1,10 +1,4 @@
----
-# 主题列表：juejin, github, android, livedatabus, eventbus
-# 贡献主题：https://github.com/xitu/juejin-markdown-themes
-theme: juejin
-highlight:
----
-LiveDataBus已经是一个老生常谈的话题了，但是我们今天搞点不一样(噱)的(头)。废话不多说，先上地址：[]()
+LiveDataBus已经是一个老生常谈的话题了，但是我们今天搞点不一样(噱)的(头)。废话不多说，先上地址：[https://github.com/cyixlq/LiveEventBus](https://github.com/cyixlq/LiveEventBus)
 
 先来说一说LiveDataBus的一些老生常谈的优势：
 - 不需要向EventBus那样注册反注册，可以自动注册解注册，避免了忘记反注册导致内存泄漏
@@ -227,6 +221,6 @@ LiveDataBus已经是一个老生常谈的话题了，但是我们今天搞点不
 
 当然，这还没完，我们还可以进一步优化一下，比如我们每次创建LiveEvent对象就会有一个Handler也被随之创建，我们完全可以共用一个Handler来将任务post到主线程，然后还有线程的判断这些方法我们也可以提取到一个公共类中，那么这个类我们不如叫它DefaultTaskExecutor吧！咦，这么巧，androidx包里面就有这个诶，那我们直接把它复制过来当工具类用吧。后面还有一个继承的父类也有限制注解？算了，不要它也不是不能用，那直接去了吧。多余的override注解也给去了，里面还有个用于切换到io线程的方法，emmm留着吧，万一以后要呢，只是线程名给它改一个我们自己想定义的名字(将盗版进行到底)...为了使用方便，把它改成单例吧，再把LiveEvent类中可以用到这个类方法的地方替换一下，完美收官！
 
-最后讲讲LiveEventBus用法，那是相当简单，参照[MainActivity]()和[SecondActivity]()
+最后讲讲LiveEventBus用法，那是相当简单，参照[MainActivity](https://github.com/cyixlq/LiveEventBus/blob/main/app/src/main/java/top/cyixlq/sample/MainActivity.kt)和[SecondActivity](https://github.com/cyixlq/LiveEventBus/blob/main/app/src/main/java/top/cyixlq/sample/SecondActivity.kt)
 
 声明：本文可能会随着项目代码的改动而导致更新不及时，请以项目中代码为准！
