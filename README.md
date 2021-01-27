@@ -1,14 +1,14 @@
 LiveDataBus已经是一个老生常谈的话题了，但是我们今天搞点不一样(噱)的(头)。废话不多说，先上地址：[https://github.com/cyixlq/LiveEventBus](https://github.com/cyixlq/LiveEventBus)
 
 先来说一说LiveDataBus的一些老生常谈的优势：
-- 不需要向EventBus那样注册反注册，可以自动注册解注册，避免了忘记反注册导致内存泄漏
+- 不需要像EventBus那样注册反注册，可以自动注册解注册，避免了忘记反注册导致内存泄漏
 - 事件发送不是通过反射执行，但现在EventBus通过APT也可以实现
 - 其它，还有吗？我暂时没想到
 
 接着，我们看一看将LiveData打造成一款事件总线类型的框架首先要克服的一些问题：
-- 在组件从非活跃状态变成活跃状态时，会将observe之前的value发送过来。（这个问题怎么说呢，你说它是问题，但是有的业务场景确实需要(sticky模式)，你说他不是问题，但是大部分场景我们确实只需要在订阅事件之后的数据，这个也算一个残次版sticky模式）
+- 在组件从非活跃状态变成活跃状态时，会将observe之前的value发送过来。（这个问题怎么说呢，你说它是问题，但是有的业务场景确实需要(sticky模式，但是并不需要每次从onStop之后恢复过来都发送一次)，你说他不是问题，但是大部分场景我们确实只需要在订阅事件之后的数据。
 - LiveData数据丢失的问题。LiveData怎么判断一个组件是否在活跃状态？可以通过代码`mOwner.getLifecycle().getCurrentState().isAtLeast(STARTED)`知道，至少是STARTED状态的才是活跃状态。那么执行过哪些生命周期回调才算是STARTED状态呢？我们通过查看LifecycleRegistry类的getStateAfter方法可以知道，在onStart和onPause之间均是STARTED状态（这里为了我的排版我就不贴代码了，感兴趣的可以去自行查看）。因此，组件在onCreate/onStop的时候是收不到数据的，更不用说onDestroy。😁但是其实这也不算问题，因为LiveData认为看不到界面的时候更新界面是毫无意义的，并且LiveData本身就不是设计用来传送事件的，而是用来更新UI的，你要强行把它打造成事件总线框架那`谷歌`能有什么办法。`谷歌内心OS：你们这不是强人锁男吗？`。另外postValue的时候通过阅读代码逻辑可以发现(如果你不想读，那么你可以直接看postValue的注释文档)，如果你在短时间内多次postValue，那么最终只有最新的value才能发送出去。
-- LiveData不支持完整的粘性事件。其实这也不算...（打住，别说了，我知道了，这也不算问题）
+- LiveData的粘性事件有点不合逻辑。其实这也不算...（打住，别说了，我知道了，这也不算问题）
 
 接着我们来看一看以往我们为了将LiveData打造成一款简易LiveDataBus是怎么将这些问题克服的，上个链接，先看看简易版LiveDataBus[点我前往](https://tech.meituan.com/2018/07/26/android-livedatabus.html)：
 - 在observe LiveData的时候反射修改对应ObserverWrapper中mLastVersion的值，让它和LiveData中的mVersion保持一致，这样在生命周期状态发生改变分发value的时候，不会因为订阅时的版本小于LiveData中的版本而被认为其数据需要更新。（那有的同学就会说了：啊啊啊~，那你用了反射会不会影响我做的响应时间要6，7s的APP的运行速度啊，毕竟大家都说反射性能都很低的！| 别急，我们接着往下看）
@@ -35,7 +35,7 @@ LiveDataBus已经是一个老生常谈的话题了，但是我们今天搞点不
     // 2.直接看对应方法源码，发现由DefaultTaskExecutor类实现，直接用其实现进行替换
     if (Looper.getMainLooper().getThread() != Thread.currentThread())
     ```
-3. 改造postValue方法，解决同一时间多次postValue只会发送最新的值，同时将修饰改成public。通过源码发现postValue通过Handler将任务post到主线程最终调用setValue，我们改造就是每一次执行postValue就判断当前调用线程是不是主线程，是主线程就可以直接调用setValue，否则使用Handler post到主线程执行setValue。为了同时去除没用的变量：`mDataLock`，`mPendingData`，`mPostValueRunnable`，添加一个成员变量用于切换到主线程的Handler代码如下，为了将改(盗)造(版)进行到底，同时为了更符合语义，我们可以将postValue方法改名为postEvent方法：
+3. 改造postValue方法，解决同一时间多次postValue只会发送最新的值，同时将修饰改成public。通过源码发现postValue通过Handler将任务post到主线程最终调用setValue，我们改造就是每一次执行postValue就判断当前调用线程是不是主线程，是主线程就可以直接调用setValue，否则使用Handler post到主线程执行setValue。同时去除没用的变量：`mDataLock`，`mPendingData`，`mPostValueRunnable`。再添加一个成员变量Handler，用于切换到主线程。为了将改(盗)造(版)进行到底，同时为了更符合语义，我们可以将postValue方法改名为postEvent：
     ```
     // 用于切换到主线程的Handler
     private final Handler mHandler = new Handler(Looper.getMainLooper());
@@ -48,16 +48,16 @@ LiveDataBus已经是一个老生常谈的话题了，但是我们今天搞点不
             mHandler.post(() -> setValue(value));
     }
     ```
-4. 改造setValue方法，解决setValue只在onStart和onPause生命周期之间才能接收到value的问题。只需将上文提到的约束扩大到CREATED范围（onCreate和onStop之间）就行，修改LifecycleBoundObserver类中shouldBeActive方法，同时外部其实用不到setValue方法，都可以直接通过postEvent来间接调用，所以可以修饰成private。代码如下：
+4. 改造setValue方法，解决setValue只在onStart和onPause生命周期之间才能接收到value的问题。只需将上文提到的约束扩大到CREATED范围就行（onCreate和onStop之间），改成这个范围之后也能顺带解决Activity在onStop之后恢复又会重新发送一次事件的问题。修改LifecycleBoundObserver类中shouldBeActive方法，代码如下。同时外部其实用不到setValue方法，都可以直接通过postEvent来间接调用，所以可以修饰成private。
 	```
     @Override
     boolean shouldBeActive() {
         return mOwner.getLifecycle().getCurrentState().isAtLeast(CREATED);
     }
     ```
-5. 为了解决组件从非活跃状态切换到活跃状态会将observe之前的value发送过来，同时又为了拓展需要这种需求的情况，那我们直接打造一个完整版sticky模式吧。我们在ObserverWrapper中添加isStickyMode成员变量（名字有点长，但是浅显易懂），同时为其添加构造方法，代码如下：
+5. 为了解决组件从非活跃状态切换到活跃状态会将observe之前的value发送过来，同时又为了拓展需要这种需求的情况，那我们直接打造一个可以控制是否需要sticky的模式吧。我们在ObserverWrapper中添加isStickyMode成员变量，同时为其添加构造方法，代码如下：
 	````
-    boolean isStickyMode;
+    final boolean isStickyMode;
 
     ObserverWrapper(Observer<? super T> observer, final boolean isStickyMode) {
         mObserver = observer;
@@ -73,7 +73,7 @@ LiveDataBus已经是一个老生常谈的话题了，但是我们今天搞点不
         mOwner = owner;
     }
     ````
-    另外还需要添加一个observeSticky方法代表在以sticky模式观察，observe方法也需要改造，代表不需要最新的值发送出去。observeForever同理也进行改造。代码如下：
+    另外还需要添加一个observeSticky方法代表在以sticky模式观察，observe方法也需要改造，代表不以sticky模式观察。observeForever同理也进行改造。代码如下：
     ```
     @MainThread
     public void observe(@NonNull LifecycleOwner owner, @NonNull Observer<? super T> observer) {
@@ -131,43 +131,13 @@ LiveDataBus已经是一个老生常谈的话题了，但是我们今天搞点不
         wrapper.activeStateChanged(true);
     }
     ```
-	完整的粘性事件，那肯定需要一个成员变量来存储历史的值，那我们不妨叫它mStickyValue，并且把它声明为LinkedList<Object>类型吧，最后在分发值的时候，如果是粘性模式就要将存下来的值全部发送出去，否则就发送最后那个值，分发值最终调用的是considerNotify方法。另外，setValue是调用postEvent的时候最终会调用的方法，如果是粘性模式，就需要将值存下来，改造代码分别如下：
-    ````
-    private final LinkedList<Object> mStickyValue = new LinkedList<>();
-
-    private void considerNotify(ObserverWrapper observer) {
-        if (!observer.mActive) {
-            return;
-        }
-        if (!observer.shouldBeActive()) {
-            observer.activeStateChanged(false);
-            return;
-        }
-        if (observer.mLastVersion >= mVersion) {
-            return;
-        }
-        observer.mLastVersion = mVersion;
-        if (observer.isStickyMode) {
-            for (Object value : mStickyValue) {
-                //noinspection unchecked
-                observer.mObserver.onChanged((T) value);
-            }
-        } else {
-            //noinspection unchecked
-            observer.mObserver.onChanged((T) mData);
-        }
-        observer.isStickyMode = false;
+6. 有了isStickyMode这个变量之后，version的对比显得就不必要了，之前LiveData原有逻辑是组件从非活跃变为活跃状态就会调用dispatchingValue方法，而dispatchingValue方法又会调用considerNotify方法，considerNotify方法中对比Observer和LiveData中的版本，如果Observer中的mLastVersion小于LiveData中的mVersion说明Observer没有接收到最新的数据，那么便进行一次分发。现在我们有了isStickyMode变量控制，加上活跃状态的范围提升到onCreate到onStop之间(这个范围之外的生命周期只剩onDestroy，但是到了这个状态LiveData会自动将这个Observer给移除)，版本的对比就起不了什么作用，可以将相关变量与方法精简掉(还能防止发送事件次数过多，mVersion超过了int所能容纳的最大值导致的异常，虽然你的App也不可能有发送了20多亿次事件用户还没把你App关掉的情况)。considerNotify方法中通过判断版本是否忽略分发的代码逻辑可以改成value是否被赋值过来判断是否忽略分发，代码如下：
+	```
+    if (mData == NOT_SET) {
+        // 从没发送过事件直接忽视分发事件
+        return;
     }
-
-    @MainThread
-    private void setValue(T value) {
-        assertMainThread("setValue");
-        mVersion++;
-        mData = value;
-        mStickyValue.add(value);
-        dispatchingValue(null);
-    }
-    ````
+    ```
 7. 最后我们编写一个工具类，将使用方法封装起来：
 	````
     public class LiveEventBus {
@@ -217,7 +187,8 @@ LiveDataBus已经是一个老生常谈的话题了，但是我们今天搞点不
         }
     }
     ````
-最后，我们就用这几百行代码打造了一款非常牛(噱)逼(头)的事件总线框架，没有反射，不会影响你响应时间需要6，7s的APP的运行速度。你甚至还可以删除LiveEvent一些不需要的对外方法以及不再使用到的成员变量。为了进一步压缩代码行数，你甚至可以把注释也给删除了！我就这么干了，最后的LiveEvent只有256(看到这个数字，程序员狂喜，这不是2的8次方吗？888发发发啊)行代码。
+
+最后，我们就用这几百行代码打造了一款非常牛(噱)逼(头)的事件总线框架，没有反射，不会影响你响应时间需要6，7s的APP的运行速度。你甚至还可以删除LiveEvent一些不需要的对外方法以及不再使用到的成员变量。为了进一步压缩代码行数，你甚至可以把注释也给删除了！我就这么干了，最后的LiveEvent只有两百多行代码。
 
 当然，这还没完，我们还可以进一步优化一下，比如我们每次创建LiveEvent对象就会有一个Handler也被随之创建，我们完全可以共用一个Handler来将任务post到主线程，然后还有线程的判断这些方法我们也可以提取到一个公共类中，那么这个类我们不如叫它DefaultTaskExecutor吧！咦，这么巧，androidx包里面就有这个诶，那我们直接把它复制过来当工具类用吧。后面还有一个继承的父类也有限制注解？算了，不要它也不是不能用，那直接去了吧。多余的override注解也给去了，里面还有个用于切换到io线程的方法，emmm留着吧，万一以后要呢，只是线程名给它改一个我们自己想定义的名字(将盗版进行到底)...为了使用方便，把它改成单例吧，再把LiveEvent类中可以用到这个类方法的地方替换一下，完美收官！
 
