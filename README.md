@@ -195,3 +195,8 @@ LiveDataBus已经是一个老生常谈的话题了，但是我们今天搞点不
 最后讲讲LiveEventBus用法，那是相当简单，参照[MainActivity](https://github.com/cyixlq/LiveEventBus/blob/main/app/src/main/java/top/cyixlq/sample/MainActivity.kt)和[SecondActivity](https://github.com/cyixlq/LiveEventBus/blob/main/app/src/main/java/top/cyixlq/sample/SecondActivity.kt)
 
 声明：本文可能会随着项目代码的改动而导致更新不及时，请以项目中代码为准！
+
+### 2021年04月16日更新
+- 因为有的业务需要，确实需要自定义活跃状态的情况，例如必须在onResume接收事件，确保View更新的安全性。因此新增observeCustom(LifecycleOwner, Lifecycle.State, Observer<T>)和observeCustomSticky(LifecycleOwner, Lifecycle.State, Observer<T>)方法
+- 针对上文第6点`有了isStickyMode这个变量之后，version的对比显得就不必要了...`，加入用户将自定义活跃状态设置为RESUMED，onResume会因为Activity或Fragment多次进入前后台而被多次回调，为了确保事件只接收一次，所以版本的对比变得有必要了，保证Observer在接收到最新版本的值之后不再接收
+- 代码已更新至GitHub，欢迎前往查看
