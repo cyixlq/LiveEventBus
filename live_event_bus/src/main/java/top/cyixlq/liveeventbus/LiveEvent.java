@@ -21,8 +21,10 @@ public class LiveEvent<T> {
     private final SafeIterableMap<Observer<? super T>, ObserverWrapper> mObservers = new SafeIterableMap<>();
     private volatile Object mData = NOT_SET;
     private boolean mDispatchingValue;
+    final static int START_VERSION = -1;
     @SuppressWarnings("FieldCanBeLocal")
     private boolean mDispatchInvalidated;
+    private int mVersion = START_VERSION;
 
     private void considerNotify(ObserverWrapper observer) {
         if (!observer.mActive) {
@@ -32,15 +34,14 @@ public class LiveEvent<T> {
             observer.activeStateChanged(false);
             return;
         }
-        if (mData == NOT_SET) {
-            // 从没发送过事件直接忽视分发事件
+        if (observer.mLastVersion >= mVersion) {
             return;
         }
+        observer.mLastVersion = mVersion;
         //noinspection unchecked
         observer.mObserver.onChanged((T) mData);
     }
 
-    @SuppressWarnings("WeakerAccess")
     private void dispatchingValue(@Nullable ObserverWrapper initiator) {
         if (mDispatchingValue) {
             mDispatchInvalidated = true;
@@ -68,22 +69,32 @@ public class LiveEvent<T> {
     @MainThread
     public void observe(@NonNull LifecycleOwner owner, @NonNull Observer<? super T> observer) {
         assertMainThread("observe");
-        realObserve(owner, observer, false);
+        realObserveCustom(owner, Lifecycle.State.CREATED, observer, false);
     }
 
     @MainThread
     public void observeSticky(@NonNull LifecycleOwner owner, @NonNull Observer<? super T> observer) {
         assertMainThread("observeSticky");
-        realObserve(owner, observer, true);
+        realObserveCustom(owner, Lifecycle.State.CREATED, observer, true);
     }
 
     @MainThread
-    private void realObserve(@NonNull LifecycleOwner owner, @NonNull Observer<? super T> observer,
-                             boolean isStickyMode) {
+    public void observeCustom(@NonNull LifecycleOwner owner, @NonNull Lifecycle.State state, @NonNull Observer<? super T> observer) {
+        assertMainThread("observerCustom");
+        realObserveCustom(owner, state, observer, false);
+    }
+
+    @MainThread
+    public void observeCustomSticky(@NonNull LifecycleOwner owner, @NonNull Lifecycle.State state, @NonNull Observer<? super T> observer) {
+        assertMainThread("observerCustomSticky");
+        realObserveCustom(owner, state, observer, true);
+    }
+
+    private void realObserveCustom(@NonNull LifecycleOwner owner, @NonNull Lifecycle.State state, @NonNull Observer<? super T> observer, boolean isStickyMode) {
         if (owner.getLifecycle().getCurrentState() == DESTROYED) {
             return;
         }
-        LifecycleBoundObserver wrapper = new LifecycleBoundObserver(owner, observer, isStickyMode);
+        CustomActiveObserver wrapper = new CustomActiveObserver(owner, state, observer, isStickyMode);
         ObserverWrapper existing = mObservers.putIfAbsent(observer, wrapper);
         if (existing != null && !existing.isAttachedTo(owner)) {
             throw new IllegalArgumentException("Cannot add the same observer"
@@ -111,7 +122,7 @@ public class LiveEvent<T> {
     private void realObserveForever(@NonNull Observer<? super T> observer, boolean isStickyMode) {
         AlwaysActiveObserver wrapper = new AlwaysActiveObserver(observer, isStickyMode);
         ObserverWrapper existing = mObservers.putIfAbsent(observer, wrapper);
-        if (existing != null && (existing instanceof LiveEvent.LifecycleBoundObserver)) {
+        if (existing != null && (existing instanceof LiveEvent.CustomActiveObserver)) {
             throw new IllegalArgumentException("Cannot add the same observer"
                     + " with different lifecycles");
         }
@@ -153,49 +164,16 @@ public class LiveEvent<T> {
     @MainThread
     private void setValue(T value) {
         assertMainThread("setValue");
+        mVersion++;
         mData = value;
         dispatchingValue(null);
-    }
-
-    class LifecycleBoundObserver extends ObserverWrapper implements LifecycleEventObserver {
-        @NonNull
-        final LifecycleOwner mOwner;
-
-        LifecycleBoundObserver(@NonNull LifecycleOwner owner, Observer<? super T> observer,
-                               boolean isStickyMode) {
-            super(observer, isStickyMode);
-            mOwner = owner;
-        }
-
-        @Override
-        boolean shouldBeActive() {
-            return mOwner.getLifecycle().getCurrentState().isAtLeast(CREATED);
-        }
-
-        @Override
-        public void onStateChanged(@NotNull LifecycleOwner source, @NotNull Lifecycle.Event event) {
-            if (mOwner.getLifecycle().getCurrentState() == DESTROYED) {
-                removeObserver(mObserver);
-                return;
-            }
-            activeStateChanged(shouldBeActive());
-        }
-
-        @Override
-        boolean isAttachedTo(LifecycleOwner owner) {
-            return mOwner == owner;
-        }
-
-        @Override
-        void detachObserver() {
-            mOwner.getLifecycle().removeObserver(this);
-        }
     }
 
     private abstract class ObserverWrapper {
         final Observer<? super T> mObserver;
         boolean mActive;
         final boolean isStickyMode;
+        int mLastVersion = START_VERSION;
 
         ObserverWrapper(Observer<? super T> observer, final boolean isStickyMode) {
             mObserver = observer;
@@ -219,6 +197,45 @@ public class LiveEvent<T> {
             if (mActive && isStickyMode) {
                 dispatchingValue(this);
             }
+        }
+    }
+
+    private class CustomActiveObserver extends ObserverWrapper implements LifecycleEventObserver {
+
+        @NonNull
+        final Lifecycle.State mState;
+
+        @NonNull
+        final LifecycleOwner mOwner;
+
+        CustomActiveObserver(@NonNull LifecycleOwner owner, @NonNull Lifecycle.State state, Observer<? super T> observer, boolean isStickyMode) {
+            super(observer, isStickyMode);
+            this.mOwner = owner;
+            this.mState = state;
+        }
+
+        @Override
+        boolean shouldBeActive() {
+            return mOwner.getLifecycle().getCurrentState().isAtLeast(mState);
+        }
+
+        @Override
+        public void onStateChanged(@NonNull LifecycleOwner source, @NonNull Lifecycle.Event event) {
+            if (mOwner.getLifecycle().getCurrentState() == DESTROYED) {
+                removeObserver(mObserver);
+                return;
+            }
+            activeStateChanged(shouldBeActive());
+        }
+
+        @Override
+        boolean isAttachedTo(LifecycleOwner owner) {
+            return mOwner == owner;
+        }
+
+        @Override
+        void detachObserver() {
+            mOwner.getLifecycle().removeObserver(this);
         }
     }
 
